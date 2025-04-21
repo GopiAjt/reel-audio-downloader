@@ -23,7 +23,7 @@
     <br>
     <div class="container mt-5 p-5 rounded shadow" id="form-container">
         <form action="{{ url_for('download_audio') }}" method="post" id="download-form">
-            <label for="reel_url" class="form-label">Instagram Reel URL:</label>
+            <label for="reel_url" class="form-label">Instagram Reel URL</label>
             <input type="url" id="reel_url" name="reel_url" class="form-control"
                 placeholder="e.g., https://www.instagram.com/reel/CqXYZabcd12/" required>
             <button type="submit" id="submit-button" class="btn btn-primary">Extract Audio</button>

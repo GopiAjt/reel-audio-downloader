@@ -66,9 +66,3 @@ body {
 #form-container {
     flex: 1;
 }
-
-/* Optional: Footer padding and color styling */
-footer {
-    padding: 1rem 0;
-    background-color: #f8f9fa;
-}
