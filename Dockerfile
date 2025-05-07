@@ -27,7 +27,7 @@ COPY . .
 
 # Create the downloads directory expected by the app
 # and change ownership to a non-root user for security
-RUN mkdir downloads && chown -R nobody:nogroup downloads
+RUN mkdir -p downloads && chown -R nobody:nogroup downloads
 
 # Environment variables for Flask
 # FLASK_APP is used by 'flask' command, but gunicorn needs 'app:app' directly
