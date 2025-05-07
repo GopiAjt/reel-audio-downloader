@@ -65,6 +65,7 @@ html[data-theme='dark'] .navbar {
     font-size: 2.5rem;
     font-weight: 800;
     background: linear-gradient(45deg, var(--primary-btn-light), #6ea8fe);
+    background-clip: text;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     transition: all 0.3s ease;
@@ -74,6 +75,7 @@ html[data-theme='dark'] .navbar {
 
 html[data-theme='dark'] .brand-text {
     background: linear-gradient(45deg, var(--primary-btn-dark), #8bb9fe);
+    background-clip: text;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
 }
