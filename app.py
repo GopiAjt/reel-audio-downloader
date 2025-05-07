@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import instaloader
 from flask import Flask, request, render_template, send_from_directory, redirect, url_for, flash, abort
+from datetime import datetime
 
 # --- Configuration ---
 app = Flask(__name__)
@@ -18,6 +19,17 @@ app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # Limit upload size
 
 # --- Helper Functions ---
+def cleanup_old_files():
+    """Delete all files in the downloads folder."""
+    for filename in os.listdir(DOWNLOAD_FOLDER):
+        file_path = os.path.join(DOWNLOAD_FOLDER, filename)
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        except Exception as e:
+            app.logger.error(f"Error deleting {file_path}: {e}")
+
+
 def extract_shortcode(url):
     """Extracts the shortcode from an Instagram URL."""
     match = re.search(r"(?:reel|p)/([a-zA-Z0-9_-]+)", url)
@@ -78,6 +90,9 @@ def index():
 
 @app.route('/download', methods=['POST'])
 def download_audio():
+    # Clean up old files before downloading new one
+    cleanup_old_files()
+    
     reel_url = request.form.get('reel_url', '').strip()
     if not reel_url:
         flash('Please enter an Instagram Reel URL.', 'error')
@@ -148,10 +163,18 @@ def serve_file(filename):
     path = os.path.join(app.config['DOWNLOAD_FOLDER'], filename)
     if not os.path.isfile(path):
         abort(404)
-    return send_from_directory(
-        app.config['DOWNLOAD_FOLDER'], filename,
-        as_attachment=True, mimetype='audio/mpeg'
-    )
+    
+    try:
+        return send_from_directory(
+            app.config['DOWNLOAD_FOLDER'], filename,
+            as_attachment=True, mimetype='audio/mpeg'
+        )
+    finally:
+        # Clean up the file after serving
+        try:
+            os.unlink(path)
+        except Exception as e:
+            app.logger.error(f"Error deleting {path}: {e}")
 
 
 if __name__ == '__main__':
