@@ -4,6 +4,7 @@ import uuid
 import shutil
 import subprocess
 import instaloader
+import json
 from flask import Flask, request, render_template, send_from_directory, redirect, url_for, flash, abort
 from datetime import datetime
 
@@ -13,7 +14,31 @@ app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DOWNLOAD_FOLDER = os.path.join(BASE_DIR, 'downloads')
+STATS_FILE = os.path.join(BASE_DIR, 'download_stats.json')
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+
+# Initialize stats file if it doesn't exist
+def init_stats():
+    if not os.path.exists(STATS_FILE):
+        with open(STATS_FILE, 'w') as f:
+            json.dump({'total_downloads': 0}, f)
+
+def get_stats():
+    try:
+        with open(STATS_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {'total_downloads': 0}
+
+def update_stats():
+    stats = get_stats()
+    stats['total_downloads'] += 1
+    with open(STATS_FILE, 'w') as f:
+        json.dump(stats, f)
+    return stats['total_downloads']
+
+# Initialize stats on startup
+init_stats()
 
 app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # Limit upload size
@@ -85,7 +110,8 @@ def extract_audio_ffmpeg(video_path, output_path):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    stats = get_stats()
+    return render_template('index.html', total_downloads=stats['total_downloads'])
 
 
 @app.route('/download', methods=['POST'])
@@ -137,6 +163,9 @@ def download_audio():
         if not success:
             flash(msg, 'error')
             return redirect(url_for('index'))
+
+        # Update download count
+        total_downloads = update_stats()
 
         # Flash a link to download and reset page
         dl_link = url_for('serve_file', filename=final_audio_filename)

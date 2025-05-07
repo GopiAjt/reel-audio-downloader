@@ -236,3 +236,15 @@ body {
 #form-container {
     flex: 1;
 }
+
+.download-stats {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.1rem;
+    color: var(--text-color);
+}
+
+.download-stats i {
+    color: var(--primary-color);
+}
