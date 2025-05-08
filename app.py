@@ -6,8 +6,10 @@ import subprocess
 import instaloader
 import json
 import time
+import random
+import threading
 from flask import Flask, request, render_template, send_from_directory, redirect, url_for, flash, abort
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- Configuration ---
 app = Flask(__name__)
@@ -16,13 +18,78 @@ app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DOWNLOAD_FOLDER = os.path.join(BASE_DIR, 'downloads')
 STATS_FILE = os.path.join(BASE_DIR, 'download_stats.json')
+SESSION_FILE = os.path.join(BASE_DIR, 'instagram_session.json')
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
 # Rate limiting configuration
 MAX_RETRIES = 3
-INITIAL_RETRY_DELAY = 2  # seconds
+INITIAL_RETRY_DELAY = 5  # Increased initial delay
+MAX_REQUESTS_PER_HOUR = 50
+RATE_LIMIT_WINDOW = 3600  # 1 hour in seconds
 
-# Initialize stats file if it doesn't exist
+# User agents for rotation
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15'
+]
+
+class RateLimiter:
+    def __init__(self):
+        self.requests = []
+        self.lock = threading.Lock()
+
+    def can_make_request(self):
+        now = time.time()
+        with self.lock:
+            # Remove old requests
+            self.requests = [req_time for req_time in self.requests 
+                           if now - req_time < RATE_LIMIT_WINDOW]
+            
+            if len(self.requests) >= MAX_REQUESTS_PER_HOUR:
+                return False
+            
+            self.requests.append(now)
+            return True
+
+    def get_wait_time(self):
+        if not self.requests:
+            return 0
+        oldest_request = min(self.requests)
+        return max(0, RATE_LIMIT_WINDOW - (time.time() - oldest_request))
+
+rate_limiter = RateLimiter()
+
+def get_instaloader():
+    """Create and configure an Instaloader instance with session handling."""
+    L = instaloader.Instaloader(
+        download_video_thumbnails=False,
+        download_geotags=False,
+        download_comments=False,
+        save_metadata=False,
+        compress_json=False,
+        user_agent=random.choice(USER_AGENTS)
+    )
+    
+    # Try to load existing session
+    if os.path.exists(SESSION_FILE):
+        try:
+            L.load_session_from_file('instagram_session')
+            app.logger.info("Loaded existing Instagram session")
+        except Exception as e:
+            app.logger.warning(f"Failed to load session: {e}")
+    
+    return L
+
+def save_instaloader_session(L):
+    """Save the current Instagram session."""
+    try:
+        L.save_session_to_file('instagram_session')
+        app.logger.info("Saved Instagram session")
+    except Exception as e:
+        app.logger.warning(f"Failed to save session: {e}")
+
 def init_stats():
     if not os.path.exists(STATS_FILE):
         with open(STATS_FILE, 'w') as f:
@@ -115,7 +182,14 @@ def handle_instagram_error(error):
     error_str = str(error).lower()
     
     if "rate limit" in error_str or "wait a few minutes" in error_str:
+        wait_time = rate_limiter.get_wait_time()
+        if wait_time > 0:
+            return f"Instagram is temporarily limiting requests. Please try again in {int(wait_time/60)} minutes."
         return "Instagram is temporarily limiting requests. Please try again in a few minutes."
+    elif "403" in error_str or "forbidden" in error_str:
+        return "Access to this content is forbidden. The reel might be private or restricted."
+    elif "401" in error_str or "unauthorized" in error_str:
+        return "Authentication required. Please try again in a few minutes."
     elif "login required" in error_str:
         return "This reel is private or requires login to access."
     elif "not found" in error_str:
@@ -124,12 +198,19 @@ def handle_instagram_error(error):
         return f"Error accessing Instagram: {str(error)}"
 
 def download_with_retry(L, post, max_retries=MAX_RETRIES):
-    """Attempt to download with exponential backoff retry."""
+    """Attempt to download with exponential backoff retry and rate limiting."""
     retry_delay = INITIAL_RETRY_DELAY
     
     for attempt in range(max_retries):
+        if not rate_limiter.can_make_request():
+            wait_time = rate_limiter.get_wait_time()
+            raise instaloader.exceptions.InstaloaderException(
+                f"Rate limit exceeded. Please wait {int(wait_time/60)} minutes."
+            )
+            
         try:
             L.download_post(post, target='')
+            save_instaloader_session(L)  # Save successful session
             return True
         except instaloader.exceptions.InstaloaderException as e:
             if attempt == max_retries - 1:  # Last attempt
@@ -167,15 +248,7 @@ def download_audio():
     temp_dir = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_{temp_id}")
     os.makedirs(temp_dir, exist_ok=True)
 
-    L = instaloader.Instaloader(
-        download_video_thumbnails=False,
-        download_geotags=False,
-        download_comments=False,
-        save_metadata=False,
-        compress_json=False,
-        dirname_pattern=temp_dir,
-        filename_pattern="{shortcode}"
-    )
+    L = get_instaloader()
     try:
         post = instaloader.Post.from_shortcode(L.context, shortcode)
         if not post.is_video:
