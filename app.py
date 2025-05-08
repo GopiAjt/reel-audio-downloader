@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import instaloader
 import json
+import time
 from flask import Flask, request, render_template, send_from_directory, redirect, url_for, flash, abort
 from datetime import datetime
 
@@ -16,6 +17,10 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DOWNLOAD_FOLDER = os.path.join(BASE_DIR, 'downloads')
 STATS_FILE = os.path.join(BASE_DIR, 'download_stats.json')
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+
+# Rate limiting configuration
+MAX_RETRIES = 3
+INITIAL_RETRY_DELAY = 2  # seconds
 
 # Initialize stats file if it doesn't exist
 def init_stats():
@@ -105,6 +110,35 @@ def extract_audio_ffmpeg(video_path, output_path):
         app.logger.error(f"FFmpeg error: {e.stderr}")
         return False, 'Error during audio extraction.'
 
+def handle_instagram_error(error):
+    """Handle Instagram API errors with user-friendly messages."""
+    error_str = str(error).lower()
+    
+    if "rate limit" in error_str or "wait a few minutes" in error_str:
+        return "Instagram is temporarily limiting requests. Please try again in a few minutes."
+    elif "login required" in error_str:
+        return "This reel is private or requires login to access."
+    elif "not found" in error_str:
+        return "The reel could not be found. Please check the URL."
+    else:
+        return f"Error accessing Instagram: {str(error)}"
+
+def download_with_retry(L, post, max_retries=MAX_RETRIES):
+    """Attempt to download with exponential backoff retry."""
+    retry_delay = INITIAL_RETRY_DELAY
+    
+    for attempt in range(max_retries):
+        try:
+            L.download_post(post, target='')
+            return True
+        except instaloader.exceptions.InstaloaderException as e:
+            if attempt == max_retries - 1:  # Last attempt
+                raise e
+            time.sleep(retry_delay)
+            retry_delay *= 2  # Exponential backoff
+            continue
+    return False
+
 # --- Flask Routes ---
 
 
@@ -148,7 +182,11 @@ def download_audio():
             flash('This is not a video Reel.', 'error')
             return redirect(url_for('index'))
 
-        L.download_post(post, target='')
+        # Use retry mechanism for download
+        if not download_with_retry(L, post):
+            flash('Failed to download after multiple attempts. Please try again later.', 'error')
+            return redirect(url_for('index'))
+
         video_path = find_media_file(temp_dir, extensions=('.mp4',))
         if not video_path:
             flash('Video download failed.', 'error')
@@ -175,7 +213,8 @@ def download_audio():
 
     except instaloader.exceptions.InstaloaderException as e:
         app.logger.error(f"Instaloader error: {e}")
-        flash(f"Error with Instagram: {e}", 'error')
+        error_message = handle_instagram_error(e)
+        flash(error_message, 'error')
     except Exception as e:
         app.logger.error(f"Unexpected error: {e}", exc_info=True)
         flash('Unexpected error occurred.', 'error')
